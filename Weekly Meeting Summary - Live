@@ -1,0 +1,191 @@
+function createNextSevenDaysSummary() {
+  try {
+    // Define the time range for the next 7 days
+    const now = new Date();
+    const sevenDaysFromNow = new Date();
+    sevenDaysFromNow.setDate(now.getDate() + 7); // Add 7 days to the current date
+
+    // Get the user's primary calendar
+    const calendar = CalendarApp.getDefaultCalendar();
+    const events = calendar.getEvents(now, sevenDaysFromNow);
+
+    // Get the user's email address
+    const userEmail = Session.getEffectiveUser().getEmail();
+
+    // Open the existing Google Doc by its ID
+    const docId = '14ZC3jrRXGCK0hfgBiN92fItkk8B1FDhCKgDLwWYBYUQ'; // Updated document ID
+    const doc = DocumentApp.openById(docId);
+    const body = doc.getBody();
+
+    // Add the main title for the week
+    const weekTitle = `Week of ${now.toDateString()}`;
+    const weekTitleParagraph = body.appendParagraph(weekTitle);
+    weekTitleParagraph.setHeading(DocumentApp.ParagraphHeading.HEADING2);
+
+    body.appendParagraph('________________________________________________________________________________\n');
+
+    if (events.length === 0) {
+      body.appendParagraph('No events found for the next 7 days.\n');
+    } else {
+      // Group events by date
+      const eventsByDate = {};
+      events.forEach(event => {
+        const title = event.getTitle() || ''; // Handle blank titles
+        const startTime = event.getStartTime();
+        const eventDate = startTime.toDateString(); // Group by date
+        const attendees = event.getGuestList().map(guest => guest.getEmail());
+        const attendeesList = attendees.join(', ') || 'No attendees listed';
+        const organizerEmail = event.getCreators(); // Correct method to get organizer's email
+
+        // Exclude events with specific titles or patterns
+        const excludedTitles = [
+          'home',
+          'ivy',
+          'annabelle',
+          'azure weekly',
+          'wrap up/follow ups',
+          'update current q forecast',
+          'forecast',
+          'pubsec and fos office hours',
+          'slg weekly',
+          'next 2 quarters - update fc',
+          'stand-up',
+          'all hands',
+          'internal',
+          'comm of ma - github bi-weekly office hours',
+          'ask before booking',
+          'north carolina team',
+          'pa monthly team meeting',
+          'weekly prep',
+          'albert',
+          'wes'
+        ];
+
+        // Check if the title matches any excluded patterns
+        if (
+          excludedTitles.some(excluded => title.toLowerCase().includes(excluded)) ||
+          title.trim() === '' // Exclude blank titles
+        ) {
+          return; // Skip this event
+        }
+
+        // Filter out events with "ROB" in the title
+        if (title.toUpperCase().includes('ROB')) {
+          return; // Skip this event
+        }
+
+        // Filter out meetings set by the user for themselves
+        if (attendees.length === 1 && attendees[0] === userEmail) {
+          return; // Skip this event
+        }
+
+        // Filter out meetings sent from @microsoft.com with "weekly" or "monthly" in the title
+        // and without any attendee with a .gov email address
+        if (
+          typeof organizerEmail === 'string' &&
+          organizerEmail.toLowerCase().endsWith('@microsoft.com') &&
+          (title.toLowerCase().includes('weekly') || title.toLowerCase().includes('monthly')) &&
+          !attendees.some(email => email.endsWith('.gov'))
+        ) {
+          return; // Skip this event
+        }
+
+        const outcome = 'Outcome: [Add outcome here]'; // Placeholder for manual input
+
+        // Add the event to the corresponding date group
+        if (!eventsByDate[eventDate]) {
+          eventsByDate[eventDate] = [];
+        }
+        eventsByDate[eventDate].push({
+          title,
+          startTime,
+          attendeesList,
+          outcome
+        });
+      });
+
+      // Sort dates and format the output
+      const sortedDates = Object.keys(eventsByDate).sort((a, b) => new Date(a) - new Date(b));
+      sortedDates.forEach(date => {
+        // Insert the date as a bold title for the section
+        const dateParagraph = body.appendParagraph(`Date: ${date}`);
+        dateParagraph.setBold(true);
+
+        body.appendParagraph('----------------------------------------');
+        eventsByDate[date].forEach(event => {
+          body.appendParagraph(`Account/Time: ${event.title} / ${formatTime(event.startTime)}`);
+          body.appendParagraph(`GH Attendees: ${event.attendeesList}`);
+          body.appendParagraph(`Topics: `); // Topics are left blank
+          body.appendParagraph(`${event.outcome}\n`);
+        });
+        body.appendParagraph('\n');
+      });
+    }
+
+    body.appendParagraph('________________________________________________________________________________\n\n');
+
+    // Save the document
+    doc.saveAndClose();
+    Logger.log(`Document updated: ${doc.getUrl()}`);
+  } catch (error) {
+    Logger.log(`Error: ${error.message}`);
+  }
+}
+
+// Helper function to format time as "h:mm a"
+function formatTime(date) {
+  const options = { hour: 'numeric', minute: '2-digit', hour12: true };
+  return date.toLocaleTimeString('en-US', options).toLowerCase();
+}
+
+// Helper function to clean the description by removing noise but keeping email addresses
+function cleanDescription(description) {
+  // Remove HTML tags
+  description = description.replace(/<[^>]*>/g, '');
+
+  // Remove hyperlinks
+  description = description.replace(/https?:\/\/[^\s]+/g, '');
+
+  // Remove common noise patterns
+  const noisePatterns = [
+    /Microsoft Teams.*$/gim,
+    /Meeting ID:.*$/gim,
+    /Passcode:.*$/gim,
+    /\(\d{3}\) \d{3}-\d{4}.*$/gim, // Matches phone numbers like "(866) 679-9995"
+    /For organizers:.*$/gim,
+    /Find a local number.*$/gim,
+    /Reset dial-in PIN.*$/gim,
+    /Join on your computer or mobile app.*$/gim,
+    /Click here to join the meeting.*$/gim,
+    /Or call in \(audio only\).*$/gim,
+    /United States.*$/gim, // Matches "United States (Toll-free)" and similar
+    /Dial in by phone.*$/gim, // Matches "Dial in by phone"
+    /\+\d{1,3}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,9}(#.*)?/g, // Matches phone numbers with extensions
+    /Phone conference ID:.*$/gim, // Matches "Phone conference ID"
+    /Join the meeting now.*$/gim, // Matches "Join the meeting now"
+    /________________________________________________________________________________/g, // Matches long horizontal lines
+    /Thank you.*$/gim, // Matches "Thank you" and anything after it
+    /Regards.*$/gim, // Matches "Regards" and anything after it
+    /Best.*$/gim, // Matches "Best" and anything after it
+    /Sincerely.*$/gim, // Matches "Sincerely" and anything after it
+    /Cheers.*$/gim, // Matches "Cheers" and anything after it
+    /is inviting you to a scheduled Zoom meeting.*$/gim, // Matches Zoom meeting invitations
+    /Join Zoom Meeting.*$/gim, // Matches "Join Zoom Meeting"
+    /One tap mobile.*$/gim, // Matches "One tap mobile"
+    /Dial by your location.*$/gim, // Matches "Dial by your location"
+    /•.*$/gim // Matches bullet points like "• +1 312 626 6799 US (Chicago)"
+  ];
+  noisePatterns.forEach(pattern => {
+    description = description.replace(pattern, '');
+  });
+
+  // Remove extra blank lines
+  description = description.replace(/\n\s*\n/g, '\n').trim();
+
+  // Trim and truncate the description to 200 characters
+  if (description.length > 200) {
+    description = description.substring(0, 200) + '...';
+  }
+
+  return description;
+}
