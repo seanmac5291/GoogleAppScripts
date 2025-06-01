@@ -122,9 +122,9 @@ function createNextSevenDaysSummary() {
         markdownContent += '---\n\n';
         
         eventsByDate[date].forEach(event => {
-          markdownContent += `**Account/Time:** ${event.title} / ${formatTime(event.startTime)}\n\n`;
+          markdownContent += `**Account/Time:** ${formatTime(event.startTime)}\n\n`;
           markdownContent += `**GH Attendees:** \n\n`; // Leave blank
-          markdownContent += `**Topics:** \n\n`; // Leave blank
+          markdownContent += `**Topics:** ${event.title}\n\n`;
           markdownContent += `**Outcome:** \n\n`; // Leave blank
           markdownContent += '---\n\n'; // Add a separator between events
         });
