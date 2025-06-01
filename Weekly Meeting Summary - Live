@@ -205,12 +205,22 @@ function updateGitHubFile(owner, repo, path, newContent, token) {
   try {
     // Add a separator between new and existing content if the file exists
     let combinedContent;
-    if (fileExists && currentContent.length > 0) {
-      // Insert a page separator between the new content and the existing content
-      combinedContent = newContent + "\n\n<!-- PAGE BREAK -->\n\n" + currentContent;
-    } else {
-      combinedContent = newContent;
-    }
+if (fileExists && currentContent.length > 0) {
+  // Find the first line starting with '###' and insert newContent after it
+  const lines = currentContent.split('\n');
+  let insertIndex = lines.findIndex(line => line.trim().startsWith('###'));
+  if (insertIndex !== -1) {
+    insertIndex += 1; // Insert after the found line
+    const newContentLines = newContent.split('\n');
+    lines.splice(insertIndex, 0, ...newContentLines, ''); // Add a blank line after
+    combinedContent = lines.join('\n');
+  } else {
+    // If no '###' found, prepend as before
+    combinedContent = newContent + "\n\n<!-- PAGE BREAK -->\n\n" + currentContent;
+  }
+} else {
+  combinedContent = newContent;
+}
     
     // Encode content in base64
     const encodedContent = Utilities.base64Encode(combinedContent);
