@@ -19,42 +19,25 @@ function createNextSevenDaysSummary() {
     const userEmail = Session.getEffectiveUser().getEmail();
     Logger.log('User email: ' + userEmail);
 
-    // Open the existing Google Doc by its ID
-    const docId = '14ZC3jrRXGCK0hfgBiN92fItkk8B1FDhCKgDLwWYBYUQ'; // Updated document ID
-    Logger.log('Attempting to open document with ID: ' + docId);
-    const doc = DocumentApp.openById(docId);
-    const body = doc.getBody();
-    Logger.log('Successfully opened the document. Current number of elements in body: ' + body.getNumChildren());
+    // GitHub configuration
+    const githubToken = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
+    const owner = 'github';
+    const repo = 'SLGEast';
+    const path = 'WeeklyMeetingSummary.md';
+    Logger.log('GitHub configuration loaded.');
 
-    // Find the first Heading 1 element
-    let insertLocation = 0;
-    for (let i = 0; i < body.getNumChildren(); i++) {
-      const element = body.getChild(i);
-      if (element.getType() === DocumentApp.ElementType.PARAGRAPH && element.getHeading() === DocumentApp.ParagraphHeading.HEADING1) {
-        insertLocation = i + 1; // Insert after this element
-        Logger.log('Found Heading 1 at index: ' + i + '. Inserting new summary after this.');
-        break;
-      }
-    }
-
-    // If no Heading 1 is found, insert at the beginning (you might want to adjust this behavior)
-    if (insertLocation === 0) {
-      Logger.log('No Heading 1 found. Inserting new summary at the beginning of the body.');
-    }
-
-    // Create an array to hold the new content to be inserted
-    const newContent = [];
+    // Generate markdown content for the weekly summary
+    let markdownContent = '';
 
     // Add the main title for the week
-    const weekTitle = `Week of ${now.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`;
-    // Store the heading style as a string to avoid reference issues
-    newContent.push({text: weekTitle, style: 'HEADING2'});
+    const weekTitle = `## Week of ${now.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`;
+    markdownContent += weekTitle + '\n\n';
     Logger.log('Created week title: ' + weekTitle);
 
-    newContent.push({text: '________________________________________________________________________________\n', style: null});
+    markdownContent += '---\n\n';
 
     if (events.length === 0) {
-      newContent.push({text: 'No events found for the next 7 days.\n', style: null});
+      markdownContent += 'No events found for the next 7 days.\n\n';
       Logger.log('No events found, created a message.');
     } else {
       // Group events by date
@@ -132,55 +115,148 @@ function createNextSevenDaysSummary() {
       Logger.log('Sorted dates: ' + sortedDates.join(', '));
       
       sortedDates.forEach(date => {
-        // Insert the date as a bold title for the section
-        newContent.push({text: `${date}`, style: 'BOLD'}); // Use the formatted date string directly
+        // Add the date as a heading (H3) for the section
+        markdownContent += `### ${date}\n\n`;
         Logger.log('Created date heading: ' + date);
 
-        newContent.push({text: '----------------------------------------', style: null});
+        markdownContent += '---\n\n';
+        
         eventsByDate[date].forEach(event => {
-          newContent.push({text: `Account/Time: ${event.title} / ${formatTime(event.startTime)}`, style: null});
-          newContent.push({text: `GH Attendees: `, style: null}); // Leave blank
-          newContent.push({text: `Topics: `, style: null}); // Leave blank
-          newContent.push({text: `Outcome: `, style: null}); // Leave blank
-          newContent.push({text: '\n', style: null}); // Add a blank line between events
+          markdownContent += `**Account/Time:** ${event.title} / ${formatTime(event.startTime)}\n\n`;
+          markdownContent += `**GH Attendees:** \n\n`; // Leave blank
+          markdownContent += `**Topics:** \n\n`; // Leave blank
+          markdownContent += `**Outcome:** \n\n`; // Leave blank
+          markdownContent += '---\n\n'; // Add a separator between events
         });
       });
     }
 
-    newContent.push({text: '________________________________________________________________________________\n\n', style: null});
-
-    // Insert the new content after the first Heading 1
-    if (newContent.length > 0) {
-      // Insert in reverse order to maintain the correct sequence
-      for (let i = newContent.length - 1; i >= 0; i--) {
-        const item = newContent[i];
-        let para;
-        
-        if (insertLocation >= body.getNumChildren()) {
-          para = body.appendParagraph(item.text);
-        } else {
-          para = body.insertParagraph(insertLocation, item.text);
-        }
-        
-        if (item.style === 'BOLD') {
-          para.setBold(true);
-        } else if (item.style === 'HEADING2') {
-          para.setHeading(DocumentApp.ParagraphHeading.HEADING2);
-        }
-        
-        // Do not increment insertLocation here, as insertParagraph shifts elements
-      }
-      Logger.log('New weekly summary inserted after the first Heading 1.');
-    }
-
-    // Save the document
-    doc.saveAndClose();
-    Logger.log(`Document updated successfully: ${doc.getUrl()}`);
+    // Update the GitHub repo with the new content
+    updateGitHubFile(owner, repo, path, markdownContent, githubToken);
+    Logger.log('Weekly summary pushed to GitHub successfully.');
+    
   } catch (error) {
     Logger.log(`Error encountered: ${error.message}`);
     Logger.log(`Stack trace: ${error.stack}`); // This can provide more detailed error information
   }
   Logger.log('Function createNextSevenDaysSummary finished.');
+}
+
+/**
+ * Updates a file in a GitHub repository.
+ * If the file exists, it will be updated by prepending the new content to the existing content.
+ * If the file does not exist, it will be created.
+ */
+function updateGitHubFile(owner, repo, path, newContent, token) {
+  // GitHub API endpoints
+  const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
+  
+  // First, check if the file exists and get its current content and SHA
+  let fileExists = false;
+  let currentContent = '';
+  let fileSha = '';
+  
+  try {
+    const checkResponse = UrlFetchApp.fetch(apiUrl, {
+      method: 'GET',
+      headers: {
+        'Authorization': 'token ' + token,
+        'Accept': 'application/vnd.github.v3+json'
+      },
+      muteHttpExceptions: true
+    });
+    
+    const responseCode = checkResponse.getResponseCode();
+    Logger.log(`GitHub API GET response code: ${responseCode}`);
+    
+    if (responseCode === 200) {
+      fileExists = true;
+      const fileData = JSON.parse(checkResponse.getContentText());
+      fileSha = fileData.sha;
+      
+      // Decode the base64 content
+      const encodedContent = fileData.content;
+      currentContent = Utilities.newBlob(Utilities.base64Decode(encodedContent)).getDataAsString();
+      Logger.log('Existing file found. Current content length: ' + currentContent.length);
+    } else if (responseCode === 403) {
+      // Handle 403 errors which might be related to SAML enforcement
+      const responseText = checkResponse.getContentText();
+      if (responseText.includes("SAML enforcement")) {
+        throw new Error("GitHub SAML enforcement detected. You need to authorize your Personal Access Token for the GitHub organization. Go to GitHub Settings → Developer settings → Personal access tokens → Find your token → Scroll to 'Organization access' → Click 'Authorize' for the github organization.");
+      } else {
+        throw new Error(`GitHub API returned 403 Forbidden: ${responseText}`);
+      }
+    } else if (responseCode === 404) {
+      Logger.log('File does not exist yet. Will create a new file.');
+      fileExists = false;
+    } else {
+      throw new Error(`GitHub API returned unexpected status code: ${responseCode}. Response: ${checkResponse.getContentText()}`);
+    }
+  } catch (e) {
+    if (e.message.includes("SAML enforcement")) {
+      // Rethrow SAML-specific errors to preserve the helpful message
+      throw e;
+    } else {
+      Logger.log('Error checking file: ' + e.message);
+      fileExists = false;
+    }
+  }
+  
+  try {
+    // Add a separator between new and existing content if the file exists
+    let combinedContent;
+    if (fileExists && currentContent.length > 0) {
+      // Insert a page separator between the new content and the existing content
+      combinedContent = newContent + "\n\n<!-- PAGE BREAK -->\n\n" + currentContent;
+    } else {
+      combinedContent = newContent;
+    }
+    
+    // Encode content in base64
+    const encodedContent = Utilities.base64Encode(combinedContent);
+    
+    // Prepare the request payload
+    const payload = {
+      message: `Update weekly meeting summary for ${new Date().toLocaleDateString()}`,
+      content: encodedContent
+    };
+    
+    // If the file exists, include its SHA to update it
+    if (fileExists) {
+      payload.sha = fileSha;
+    }
+    
+    // Make the request to create/update the file
+    const updateResponse = UrlFetchApp.fetch(apiUrl, {
+      method: 'PUT',
+      headers: {
+        'Authorization': 'token ' + token,
+        'Content-Type': 'application/json',
+        'Accept': 'application/vnd.github.v3+json'
+      },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+    
+    const responseCode = updateResponse.getResponseCode();
+    Logger.log(`GitHub API PUT response code: ${responseCode}`);
+    
+    if (responseCode === 200 || responseCode === 201) {
+      Logger.log('File successfully ' + (fileExists ? 'updated' : 'created') + ' in GitHub repository.');
+    } else if (responseCode === 403) {
+      const responseText = updateResponse.getContentText();
+      if (responseText.includes("SAML enforcement")) {
+        throw new Error("GitHub SAML enforcement detected. You need to authorize your Personal Access Token for the GitHub organization. Go to GitHub Settings → Developer settings → Personal access tokens → Find your token → Scroll to 'Organization access' → Click 'Authorize' for the github organization.");
+      } else {
+        throw new Error(`GitHub API returned 403 Forbidden: ${responseText}`);
+      }
+    } else {
+      throw new Error(`Error updating GitHub file. Response code: ${responseCode}. Response: ${updateResponse.getContentText()}`);
+    }
+  } catch (e) {
+    Logger.log(`Error in GitHub API operation: ${e.message}`);
+    throw e; // Rethrow to show error in main function
+  }
 }
 
 // Helper function to format time as "h:mm a"
