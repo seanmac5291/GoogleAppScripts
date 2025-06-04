@@ -25,7 +25,10 @@ const EXCLUDED_DOMAINS = [
   'github.com',
   'gmail.com',
   'microsoft.com',
-  'reply.github.com' // Exclude all @gmail.com emails
+  'reply.github.com',
+  'shi.com',
+  'insight.com',
+  'dell.com' // Exclude all @gmail.com emails
   // Add more domains here as needed, e.g.:
   // 'company.com',
   // 'internal.org'
