@@ -23,6 +23,7 @@ const SPREADSHEET_ID = '1W-0n5y43H4qR6-TGJZ3sErNrFiTs8YDFmEmwai6lVzc'; // Your G
 // Domains to exclude from export - add any domains you want to skip
 const EXCLUDED_DOMAINS = [
   'github.com',
+  'gmail.com', // Exclude all @gmail.com emails
   // Add more domains here as needed, e.g.:
   // 'company.com',
   // 'internal.org'
