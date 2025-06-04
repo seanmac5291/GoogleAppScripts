@@ -1,0 +1,789 @@
+/**
+ * Google Apps Script: Other Contacts to Google Sheets Exporter
+ * This script exports "Other Contacts" from Google Contacts to a Google Sheet
+ * using the People API and can be set to run weekly via time-driven triggers
+ * 
+ * SETUP REQUIRED:
+ * 1. Enable People API in Google Apps Script:
+ *    - Click the "Services" button (+ icon) in the left sidebar
+ *    - Find "People API" and click "Add"
+ *    - It should appear in your Services list as "People"
+ * 
+ * 2. Alternative method if Services doesn't work:
+ *    - Go to Google Cloud Console (console.cloud.google.com)
+ *    - Find your Apps Script project
+ *    - Go to APIs & Services > Library
+ *    - Search for "People API" and enable it
+ */
+
+// Configuration - Updated with your specific Google Sheet
+const SHEET_NAME = 'Other Contacts Export';
+const SPREADSHEET_ID = '1W-0n5y43H4qR6-TGJZ3sErNrFiTs8YDFmEmwai6lVzc'; // Your Google Sheet
+
+// Domains to exclude from export - add any domains you want to skip
+const EXCLUDED_DOMAINS = [
+  'github.com',
+  // Add more domains here as needed, e.g.:
+  // 'company.com',
+  // 'internal.org'
+];
+
+/**
+ * Main function to export Other Contacts to Google Sheets
+ */
+function exportOtherContactsToSheet() {
+  try {
+    console.log('Starting Other Contacts export...');
+    
+    // Get or create the spreadsheet
+    const spreadsheet = getOrCreateSpreadsheet();
+    const sheet = getOrCreateSheet(spreadsheet, SHEET_NAME);
+    
+    // Get Other Contacts using enhanced method that tries multiple approaches
+    const otherContacts = getEnhancedOtherContacts();
+    console.log(`Found ${otherContacts.length} other contacts`);
+    
+    // Clear existing data and add headers
+    sheet.clear();
+    addHeaders(sheet);
+    
+    // Add contact data
+    if (otherContacts.length > 0) {
+      const contactData = processContactDataPeopleAPI(otherContacts);
+      if (contactData.length > 0) {
+        const range = sheet.getRange(2, 1, contactData.length, contactData[0].length);
+        range.setValues(contactData);
+      }
+    }
+    
+    // Add metadata
+    addMetadata(sheet, otherContacts.length);
+    
+    console.log('Export completed successfully');
+    
+  } catch (error) {
+    console.error('Error in exportOtherContactsToSheet:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get or create the target spreadsheet
+ */
+function getOrCreateSpreadsheet() {
+  try {
+    return SpreadsheetApp.openById(SPREADSHEET_ID);
+  } catch (error) {
+    console.error('Could not open the specified spreadsheet:', error);
+    throw new Error('Failed to access the Google Sheet. Please check the SPREADSHEET_ID and permissions.');
+  }
+}
+
+/**
+ * Get or create a sheet within the spreadsheet
+ */
+function getOrCreateSheet(spreadsheet, sheetName) {
+  let sheet = spreadsheet.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(sheetName);
+  }
+  return sheet;
+}
+
+/**
+ * Check if a contact should be excluded based on email domain
+ */
+function shouldExcludeContact(contact) {
+  if (!contact.emailAddresses || contact.emailAddresses.length === 0) {
+    return false; // Don't exclude contacts without email addresses
+  }
+  
+  // Check if any email address matches excluded domains
+  for (const email of contact.emailAddresses) {
+    const emailAddress = email.value.toLowerCase();
+    for (const domain of EXCLUDED_DOMAINS) {
+      if (emailAddress.endsWith(`@${domain.toLowerCase()}`)) {
+        return true;
+      }
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * Retrieve Other Contacts using People API
+ * Note: Google's People API doesn't allow direct access to "Other Contacts"
+ * So we get all contacts and filter for ones that appear to be "other contacts"
+ */
+function getOtherContactsPeopleAPI() {
+  const potentialOtherContacts = [];
+  
+  try {
+    // Get all connections (contacts) using People API
+    let pageToken = '';
+    const allConnections = [];
+    
+    do {
+      const params = {
+        resourceName: 'people/me',
+        pageSize: 1000,
+        personFields: 'names,emailAddresses,phoneNumbers,organizations,biographies,metadata,addresses,urls'
+        // Removed sources parameter as it causes the error
+      };
+      
+      if (pageToken) {
+        params.pageToken = pageToken;
+      }
+      
+      const response = People.People.Connections.list('people/me', params);
+      
+      if (response.connections) {
+        allConnections.push(...response.connections);
+      }
+      
+      pageToken = response.nextPageToken;
+    } while (pageToken);
+    
+    console.log(`Total connections found: ${allConnections.length}`);
+    
+    // Filter for contacts that appear to be "Other Contacts"
+    // These are typically contacts with minimal information or specific metadata characteristics
+    let excludedCount = 0;
+    let regularContactsCount = 0;
+    
+    for (const connection of allConnections) {
+      // Check if contact should be excluded based on domain first
+      if (shouldExcludeContact(connection)) {
+        excludedCount++;
+        console.log(`Excluding contact with domain filter: ${connection.emailAddresses?.[0]?.value || 'No email'}`);
+        continue;
+      }
+      
+      // Try to identify "other contacts" by their characteristics
+      const isLikelyOtherContact = isLikelyOtherContactType(connection);
+      
+      if (isLikelyOtherContact) {
+        potentialOtherContacts.push(connection);
+      } else {
+        regularContactsCount++;
+      }
+    }
+    
+    console.log(`Potential other contacts found: ${potentialOtherContacts.length}`);
+    console.log(`Regular contacts found: ${regularContactsCount}`);
+    console.log(`Contacts excluded by domain filter: ${excludedCount}`);
+    console.log(`Excluded domains: ${EXCLUDED_DOMAINS.join(', ')}`);
+    
+    // If we didn't find many "other contacts", let's be more inclusive
+    if (potentialOtherContacts.length < 10 && allConnections.length > 20) {
+      console.log('Low number of other contacts detected. Using more inclusive filtering...');
+      return getMoreInclusiveContacts(allConnections);
+    }
+    
+    return potentialOtherContacts;
+    
+  } catch (error) {
+    console.error('Error getting contacts with People API:', error);
+    
+    // Enhanced fallback: try with minimal fields
+    try {
+      console.log('Attempting minimal fallback method...');
+      const response = People.People.Connections.list('people/me', {
+        pageSize: 1000,
+        personFields: 'names,emailAddresses,metadata'
+      });
+      
+      if (response.connections) {
+        console.log(`Fallback found ${response.connections.length} total connections`);
+        
+        // Apply domain filtering and return all contacts since we can't distinguish types
+        const filteredConnections = response.connections.filter(connection => 
+          !shouldExcludeContact(connection)
+        );
+        console.log(`After domain filtering: ${filteredConnections.length} connections`);
+        
+        return filteredConnections;
+      }
+    } catch (fallbackError) {
+      console.error('Fallback method also failed:', fallbackError);
+    }
+    
+    return [];
+  }
+}
+
+/**
+ * Try to get Other Contacts using the otherContacts.list method
+ * This might work better for accessing the specific "Other contacts" section
+ */
+function getOtherContactsDirectAPI() {
+  try {
+    console.log('Attempting to access Other Contacts using otherContacts.list...');
+    
+    let allOtherContacts = [];
+    let pageToken = '';
+    let pageCount = 0;
+    
+    do {
+      pageCount++;
+      console.log(`Fetching page ${pageCount}...`);
+      
+      const params = {
+        pageSize: 1000,
+        readMask: 'names,emailAddresses,phoneNumbers'  // Minimal allowed fields
+      };
+      
+      if (pageToken) {
+        params.pageToken = pageToken;
+      }
+      
+      const response = People.OtherContacts.list(params);
+      
+      if (response.otherContacts && response.otherContacts.length > 0) {
+        allOtherContacts.push(...response.otherContacts);
+        console.log(`Page ${pageCount}: Found ${response.otherContacts.length} contacts (Total so far: ${allOtherContacts.length})`);
+      } else {
+        console.log(`Page ${pageCount}: No contacts found`);
+      }
+      
+      pageToken = response.nextPageToken;
+      
+    } while (pageToken);
+    
+    console.log('✅ otherContacts.list pagination complete!');
+    console.log(`📧 Total other contacts found across all pages: ${allOtherContacts.length}`);
+    
+    if (allOtherContacts.length > 0) {
+      // Filter out excluded domains
+      const filteredContacts = allOtherContacts.filter(contact => 
+        !shouldExcludeContact(contact)
+      );
+      
+      console.log(`After domain filtering: ${filteredContacts.length} other contacts`);
+      console.log(`Excluded by domain filter: ${allOtherContacts.length - filteredContacts.length} contacts`);
+      
+      return filteredContacts;
+    }
+    
+    return [];
+    
+  } catch (error) {
+    console.error('❌ otherContacts.list failed:', error.toString());
+    
+    if (error.toString().includes('not allowed')) {
+      console.log('Field restrictions detected. Trying with even more minimal fields...');
+      return getOtherContactsMinimalAPI();
+    }
+    
+    return null; // Return null to indicate this method failed
+  }
+}
+
+/**
+ * Try Other Contacts API with absolute minimal fields
+ */
+function getOtherContactsMinimalAPI() {
+  try {
+    console.log('Attempting Other Contacts with minimal fields...');
+    
+    const response = People.OtherContacts.list({
+      pageSize: 1000,
+      readMask: 'names,emailAddresses'  // Absolute minimum
+    });
+    
+    console.log('✅ Minimal Other Contacts API successful!');
+    console.log(`Found ${response.otherContacts ? response.otherContacts.length : 0} other contacts`);
+    
+    if (response.otherContacts && response.otherContacts.length > 0) {
+      const filteredContacts = response.otherContacts.filter(contact => 
+        !shouldExcludeContact(contact)
+      );
+      
+      console.log(`After domain filtering: ${filteredContacts.length} other contacts`);
+      return filteredContacts;
+    }
+    
+    return [];
+    
+  } catch (error) {
+    console.error('❌ Minimal Other Contacts API also failed:', error.toString());
+    return null;
+  }
+}
+
+/**
+ * Enhanced function to try multiple methods for getting Other Contacts
+ */
+function getEnhancedOtherContacts() {
+  let contacts = [];
+  
+  // First, try the direct method for Other Contacts
+  console.log('=== TRYING MULTIPLE METHODS TO ACCESS OTHER CONTACTS ===');
+  console.log('');
+  
+  contacts = getOtherContactsDirectAPI();
+  if (contacts && contacts.length > 0) {
+    console.log(`✅ SUCCESS: Found ${contacts.length} contacts using direct Other Contacts method`);
+    return contacts;
+  } else if (contacts === null) {
+    console.log('❌ Direct Other Contacts method failed - method not available');
+  } else {
+    console.log('⚠️ Direct Other Contacts method returned 0 contacts');
+  }
+  
+  // Fallback to general connections method
+  console.log('');
+  console.log('🔄 Falling back to general connections method...');
+  contacts = getOtherContactsPeopleAPI();
+  
+  if (contacts && contacts.length > 0) {
+    console.log(`✅ FALLBACK SUCCESS: Found ${contacts.length} contacts using connections filtering`);
+  } else {
+    console.log('❌ All methods failed to find contacts');
+  }
+  
+  return contacts;
+}
+
+/**
+ * Determine if a contact is likely an "Other Contact" based on its characteristics
+ */
+function isLikelyOtherContactType(contact) {
+  // Other contacts typically have:
+  // 1. Minimal contact information
+  // 2. No organization information
+  // 3. Limited metadata sources
+  // 4. Often just an email address or basic name
+  
+  const hasName = contact.names && contact.names.length > 0 && contact.names[0].displayName;
+  const hasEmail = contact.emailAddresses && contact.emailAddresses.length > 0;
+  const hasPhone = contact.phoneNumbers && contact.phoneNumbers.length > 0;
+  const hasOrganization = contact.organizations && contact.organizations.length > 0;
+  const hasAddress = contact.addresses && contact.addresses.length > 0;
+  const hasBiography = contact.biographies && contact.biographies.length > 0;
+  const hasUrls = contact.urls && contact.urls.length > 0;
+  
+  // Count how much information this contact has
+  const infoCount = [hasName, hasEmail, hasPhone, hasOrganization, hasAddress, hasBiography, hasUrls]
+    .filter(Boolean).length;
+  
+  // Other contacts typically have minimal information (1-2 fields)
+  // AND usually don't have organization or detailed biographical info
+  const isMinimalInfo = infoCount <= 2;
+  const lacksDetailedInfo = !hasOrganization && !hasBiography && !hasAddress;
+  
+  // Check metadata for hints
+  let hasMinimalMetadata = true;
+  if (contact.metadata && contact.metadata.sources) {
+    // Regular contacts often have more metadata sources
+    hasMinimalMetadata = contact.metadata.sources.length <= 2;
+  }
+  
+  // A contact is likely an "other contact" if it has minimal info AND lacks detailed info
+  return (isMinimalInfo && lacksDetailedInfo) || (hasMinimalMetadata && lacksDetailedInfo);
+}
+
+/**
+ * More inclusive approach when strict filtering doesn't yield many results
+ */
+function getMoreInclusiveContacts(allConnections) {
+  console.log('Using more inclusive contact filtering...');
+  
+  // Apply domain filtering but be more inclusive about what constitutes "other contacts"
+  const filteredContacts = allConnections.filter(connection => {
+    // Exclude by domain first
+    if (shouldExcludeContact(connection)) {
+      return false;
+    }
+    
+    // Include contacts that have email but minimal other information
+    const hasEmail = connection.emailAddresses && connection.emailAddresses.length > 0;
+    const hasOrganization = connection.organizations && connection.organizations.length > 0;
+    const hasBiography = connection.biographies && connection.biographies.length > 0;
+    
+    // More inclusive: include contacts with email but no organization or biography
+    return hasEmail && (!hasOrganization || !hasBiography);
+  });
+  
+  console.log(`More inclusive filtering yielded: ${filteredContacts.length} contacts`);
+  return filteredContacts;
+}
+
+/**
+ * Process contact data from People API into array format for sheets
+ */
+function processContactDataPeopleAPI(contacts) {
+  const data = [];
+  
+  for (const contact of contacts) {
+    try {
+      // Extract name information
+      let fullName = '';
+      let givenName = '';
+      let familyName = '';
+      
+      if (contact.names && contact.names.length > 0) {
+        const primaryName = contact.names[0];
+        fullName = primaryName.displayName || '';
+        givenName = primaryName.givenName || '';
+        familyName = primaryName.familyName || '';
+      }
+      
+      // Extract email information
+      let primaryEmail = '';
+      let allEmails = '';
+      
+      if (contact.emailAddresses && contact.emailAddresses.length > 0) {
+        primaryEmail = contact.emailAddresses[0].value || '';
+        allEmails = contact.emailAddresses.map(email => 
+          `${email.value}${email.type ? ` (${email.type})` : ''}`
+        ).join(', ');
+      }
+      
+      // Extract phone information
+      let primaryPhone = '';
+      let allPhones = '';
+      
+      if (contact.phoneNumbers && contact.phoneNumbers.length > 0) {
+        primaryPhone = contact.phoneNumbers[0].value || '';
+        allPhones = contact.phoneNumbers.map(phone => 
+          `${phone.value}${phone.type ? ` (${phone.type})` : ''}`
+        ).join(', ');
+      }
+      
+      // Extract organization information
+      let company = '';
+      let jobTitle = '';
+      
+      if (contact.organizations && contact.organizations.length > 0) {
+        const primaryOrg = contact.organizations[0];
+        company = primaryOrg.name || '';
+        jobTitle = primaryOrg.title || '';
+      }
+      
+      // Extract notes/biography
+      let notes = '';
+      if (contact.biographies && contact.biographies.length > 0) {
+        notes = contact.biographies[0].value || '';
+      }
+      
+      // Get last updated date
+      let lastUpdated = new Date();
+      if (contact.metadata && contact.metadata.sources && contact.metadata.sources.length > 0) {
+        const source = contact.metadata.sources[0];
+        if (source.updateTime) {
+          lastUpdated = new Date(source.updateTime);
+        }
+      }
+      
+      // Only add contacts that have at least a name or email
+      if (fullName || primaryEmail) {
+        data.push([
+          fullName,
+          givenName,
+          familyName,
+          primaryEmail,
+          allEmails,
+          primaryPhone,
+          allPhones,
+          company,
+          jobTitle,
+          notes,
+          lastUpdated
+        ]);
+      }
+      
+    } catch (error) {
+      console.error('Error processing contact:', error);
+      // Add a row with error info
+      data.push([
+        'ERROR PROCESSING CONTACT',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        error.toString(),
+        new Date()
+      ]);
+    }
+  }
+  
+  return data;
+}
+
+/**
+ * Add headers to the sheet
+ */
+function addHeaders(sheet) {
+  const headers = [
+    'Full Name',
+    'First Name',
+    'Last Name',
+    'Primary Email',
+    'All Emails',
+    'Primary Phone',
+    'All Phones',
+    'Company',
+    'Job Title',
+    'Notes',
+    'Last Updated'
+  ];
+  
+  const headerRange = sheet.getRange(1, 1, 1, headers.length);
+  headerRange.setValues([headers]);
+  
+  // Format headers
+  headerRange.setFontWeight('bold');
+  headerRange.setBackground('#4285f4');
+  headerRange.setFontColor('white');
+}
+
+/**
+ * Add metadata about the export
+ */
+function addMetadata(sheet, contactCount) {
+  const lastRow = sheet.getLastRow();
+  const metadataRow = lastRow + 2;
+  
+  sheet.getRange(metadataRow, 1).setValue('Export Information:');
+  sheet.getRange(metadataRow + 1, 1).setValue('Total Contacts Exported:');
+  sheet.getRange(metadataRow + 1, 2).setValue(contactCount);
+  sheet.getRange(metadataRow + 2, 1).setValue('Export Date:');
+  sheet.getRange(metadataRow + 2, 2).setValue(new Date());
+  sheet.getRange(metadataRow + 3, 1).setValue('Excluded Domains:');
+  sheet.getRange(metadataRow + 3, 2).setValue(EXCLUDED_DOMAINS.join(', '));
+  
+  // Format metadata
+  sheet.getRange(metadataRow, 1).setFontWeight('bold');
+  sheet.getRange(metadataRow + 1, 1, 3, 1).setFontWeight('bold');
+}
+
+/**
+ * Set up weekly trigger for automatic export
+ */
+function setupWeeklyTrigger() {
+  // Delete existing triggers for this function
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(trigger => {
+    if (trigger.getHandlerFunction() === 'exportOtherContactsToSheet') {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+  
+  // Create new weekly trigger (runs every Monday at 9 AM)
+  ScriptApp.newTrigger('exportOtherContactsToSheet')
+    .timeBased()
+    .everyWeeks(1)
+    .onWeekDay(ScriptApp.WeekDay.MONDAY)
+    .atHour(9)
+    .create();
+    
+  console.log('Weekly trigger set up successfully');
+}
+
+/**
+ * Remove all triggers for this script
+ */
+function removeAllTriggers() {
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(trigger => {
+    if (trigger.getHandlerFunction() === 'exportOtherContactsToSheet') {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+  console.log('All triggers removed');
+}
+
+/**
+ * IMPORTANT: Run this function first to enable People API
+ * This will guide you through enabling the People API
+ */
+function setupPeopleAPI() {
+  console.log('=== PEOPLE API SETUP INSTRUCTIONS ===');
+  console.log('');
+  console.log('METHOD 1 (Recommended):');
+  console.log('1. In Google Apps Script, look at the left sidebar');
+  console.log('2. Click the "Services" button (looks like a + icon)');
+  console.log('3. In the popup, find "People API" in the list');
+  console.log('4. Click "Add" next to People API');
+  console.log('5. You should see "People" appear in your Services list');
+  console.log('6. Run testPeopleAPI() to verify it works');
+  console.log('');
+  console.log('METHOD 2 (If Method 1 doesn\'t work):');
+  console.log('1. Go to https://console.cloud.google.com');
+  console.log('2. Select your Apps Script project (or create one)');
+  console.log('3. Go to "APIs & Services" > "Library"');
+  console.log('4. Search for "People API"');
+  console.log('5. Click on it and press "Enable"');
+  console.log('6. Return to Apps Script and run testPeopleAPI()');
+  console.log('');
+  console.log('=== END SETUP INSTRUCTIONS ===');
+}
+
+/**
+ * Test function to check People API access with better error handling
+ */
+function testPeopleAPI() {
+  console.log('Testing People API access...');
+  
+  try {
+    // Check if People API is available
+    if (typeof People === 'undefined') {
+      console.error('❌ People API is not enabled!');
+      console.log('');
+      console.log('Please run setupPeopleAPI() for instructions on how to enable it.');
+      return false;
+    }
+    
+    console.log('✅ People API object found, attempting API call...');
+    
+    const response = People.People.Connections.list('people/me', {
+      pageSize: 5,
+      personFields: 'names,emailAddresses'
+    });
+    
+    console.log('✅ People API test successful!');
+    console.log(`Found ${response.connections ? response.connections.length : 0} connections in test`);
+    
+    if (response.connections && response.connections.length > 0) {
+      console.log('Sample contact names:');
+      response.connections.forEach((contact, index) => {
+        const name = contact.names?.[0]?.displayName || 'No name';
+        const email = contact.emailAddresses?.[0]?.value || 'No email';
+        console.log(`  ${index + 1}. ${name} (${email})`);
+      });
+    }
+    
+    console.log('');
+    console.log('🎉 People API is working! You can now run testExport() or exportOtherContactsToSheet()');
+    return true;
+    
+  } catch (error) {
+    console.error('❌ People API test failed:', error.toString());
+    console.log('');
+    console.log('This usually means:');
+    console.log('1. People API is not enabled (run setupPeopleAPI() for instructions)');
+    console.log('2. You need to authorize the script (try running again)');
+    console.log('3. Your Google account may not have contacts access');
+    return false;
+  }
+}
+
+/**
+ * Enhanced test export with better error handling
+ */
+function testExport() {
+  console.log('=== RUNNING TEST EXPORT ===');
+  console.log('');
+  
+  // First check if People API is working
+  if (!testPeopleAPI()) {
+    console.log('');
+    console.log('❌ Cannot run export - People API is not working');
+    console.log('Please fix the People API setup first, then try again.');
+    return;
+  }
+  
+  console.log('');
+  console.log('People API is working, proceeding with export...');
+  console.log('');
+  
+  try {
+    exportOtherContactsToSheet();
+  } catch (error) {
+    console.error('Export failed:', error);
+  }
+}
+
+/**
+ * Function to automatically save Other Contacts as regular contacts
+ * This can help if you want to move them from "Other contacts" to "Contacts"
+ */
+function saveOtherContactsAsRegularContacts() {
+  console.log('=== SAVING OTHER CONTACTS AS REGULAR CONTACTS ===');
+  console.log('');
+  
+  try {
+    // Get other contacts first
+    const otherContacts = getOtherContactsDirectAPI();
+    
+    if (!otherContacts || otherContacts.length === 0) {
+      console.log('❌ No other contacts found to save');
+      return;
+    }
+    
+    console.log(`Found ${otherContacts.length} other contacts to save as regular contacts`);
+    
+    let savedCount = 0;
+    let errorCount = 0;
+    
+    for (const contact of otherContacts) {
+      try {
+        // Create a new contact based on the other contact data
+        const newContact = {
+          names: contact.names || [],
+          emailAddresses: contact.emailAddresses || [],
+          phoneNumbers: contact.phoneNumbers || []
+        };
+        
+        // Use the People API to create a new contact
+        const savedContact = People.People.createContact(newContact);
+        
+        if (savedContact) {
+          savedCount++;
+          const name = contact.names?.[0]?.displayName || 'No name';
+          const email = contact.emailAddresses?.[0]?.value || 'No email';
+          console.log(`✅ Saved: ${name} (${email})`);
+        }
+        
+      } catch (error) {
+        errorCount++;
+        const name = contact.names?.[0]?.displayName || 'Unknown';
+        console.error(`❌ Failed to save ${name}: ${error.toString()}`);
+      }
+    }
+    
+    console.log('');
+    console.log('=== SAVE RESULTS ===');
+    console.log(`✅ Successfully saved: ${savedCount} contacts`);
+    console.log(`❌ Failed to save: ${errorCount} contacts`);
+    console.log(`📧 Total processed: ${otherContacts.length} contacts`);
+    
+    if (savedCount > 0) {
+      console.log('');
+      console.log('🎉 Contacts have been saved as regular contacts!');
+      console.log('You can now run the export again to capture them.');
+    }
+    
+  } catch (error) {
+    console.error('Error in saveOtherContactsAsRegularContacts:', error);
+  }
+}
+
+/**
+ * Combined function: Save other contacts as regular contacts, then export
+ */
+function saveAndExportContacts() {
+  console.log('=== SAVE AND EXPORT WORKFLOW ===');
+  console.log('');
+  
+  // First, save other contacts as regular contacts
+  saveOtherContactsAsRegularContacts();
+  
+  console.log('');
+  console.log('Waiting 5 seconds for contacts to sync...');
+  
+  // Wait a bit for the contacts to sync
+  Utilities.sleep(5000);
+  
+  console.log('');
+  console.log('Now running export...');
+  
+  // Then export all contacts
+  exportOtherContactsToSheet();
+}
