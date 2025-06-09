@@ -2,18 +2,31 @@ function createNextSevenDaysSummary() {
   try {
     Logger.log('Starting createNextSevenDaysSummary function');
 
-    // Define the time range for the next 7 days
+    // Define the time range for the upcoming Monday-Sunday week
     const now = new Date();
-    const sevenDaysFromNow = new Date();
-    sevenDaysFromNow.setDate(now.getDate() + 7); // Add 7 days to the current date
+    
+    // Calculate the next Monday
+    const nextMonday = new Date(now);
+    const daysUntilMonday = (8 - now.getDay()) % 7; // 0 = Sunday, 1 = Monday, etc.
+    // If today is Monday (1), we want next Monday (7 days), not today
+    const daysToAdd = daysUntilMonday === 0 ? 7 : daysUntilMonday;
+    nextMonday.setDate(now.getDate() + daysToAdd);
+    nextMonday.setHours(0, 0, 0, 0); // Start at beginning of Monday
+    
+    // Calculate the following Sunday (6 days after Monday)
+    const followingSunday = new Date(nextMonday);
+    followingSunday.setDate(nextMonday.getDate() + 6);
+    followingSunday.setHours(23, 59, 59, 999); // End at end of Sunday
+    
     Logger.log('Current date: ' + now);
-    Logger.log('Date 7 days from now: ' + sevenDaysFromNow);
+    Logger.log('Week start (Monday): ' + nextMonday);
+    Logger.log('Week end (Sunday): ' + followingSunday);
 
     // Get the user's primary calendar
     const calendar = CalendarApp.getDefaultCalendar();
     Logger.log('Successfully accessed the default calendar.');
-    const events = calendar.getEvents(now, sevenDaysFromNow);
-    Logger.log('Number of events found in the next 7 days: ' + events.length);
+    const events = calendar.getEvents(nextMonday, followingSunday);
+    Logger.log('Number of events found for the upcoming Monday-Sunday week: ' + events.length);
 
     // Get the user's email address
     const userEmail = Session.getEffectiveUser().getEmail();
