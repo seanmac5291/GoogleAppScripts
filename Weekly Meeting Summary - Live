@@ -23,7 +23,7 @@ function createNextSevenDaysSummary() {
     const githubToken = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
     const owner = 'github';
     const repo = 'SLGEast';
-    const path = 'WeeklyMeetingSummary.md';
+    const path = '%23WeeklyMeetingSummary.md'; // URL encoded # character
     Logger.log('GitHub configuration loaded.');
 
     // Generate markdown content for the weekly summary
@@ -176,7 +176,12 @@ function updateGitHubFile(owner, repo, path, newContent, token) {
       
       // Decode the base64 content
       const encodedContent = fileData.content;
-      currentContent = Utilities.newBlob(Utilities.base64Decode(encodedContent)).getDataAsString();
+      try {
+        currentContent = Utilities.newBlob(Utilities.base64Decode(encodedContent)).getDataAsString();
+      } catch (decodeError) {
+        // Fallback: try direct base64 decoding
+        currentContent = Utilities.base64DecodeWebSafe(encodedContent);
+      }
       Logger.log('Existing file found. Current content length: ' + currentContent.length);
     } else if (responseCode === 403) {
       // Handle 403 errors which might be related to SAML enforcement
