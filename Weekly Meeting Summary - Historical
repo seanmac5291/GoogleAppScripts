@@ -1,32 +1,25 @@
-function createNextSevenDaysSummary() {
+function createWeeklySummaryForSpecificWeek() {
   try {
-    Logger.log('Starting createNextSevenDaysSummary function');
+    Logger.log('Starting createWeeklySummaryForSpecificWeek function');
 
-    // Define the time range for the upcoming Monday-Sunday week
-    const now = new Date();
-    
-    // Calculate the next Monday
-    const nextMonday = new Date(now);
-    const daysUntilMonday = (8 - now.getDay()) % 7; // 0 = Sunday, 1 = Monday, etc.
-    // If today is Monday (1), we want next Monday (7 days), not today
-    const daysToAdd = daysUntilMonday === 0 ? 7 : daysUntilMonday;
-    nextMonday.setDate(now.getDate() + daysToAdd);
-    nextMonday.setHours(0, 0, 0, 0); // Start at beginning of Monday
+    // MODIFY THIS DATE to get different weeks
+    // Set the Monday of the week you want to analyze
+    const targetMonday = new Date('2025-08-18'); // Week of August 18th, 2025
+    targetMonday.setHours(0, 0, 0, 0); // Start at beginning of Monday
     
     // Calculate the following Sunday (6 days after Monday)
-    const followingSunday = new Date(nextMonday);
-    followingSunday.setDate(nextMonday.getDate() + 6);
+    const followingSunday = new Date(targetMonday);
+    followingSunday.setDate(targetMonday.getDate() + 6);
     followingSunday.setHours(23, 59, 59, 999); // End at end of Sunday
     
-    Logger.log('Current date: ' + now);
-    Logger.log('Week start (Monday): ' + nextMonday);
-    Logger.log('Week end (Sunday): ' + followingSunday);
+    Logger.log('Target week start (Monday): ' + targetMonday);
+    Logger.log('Target week end (Sunday): ' + followingSunday);
 
     // Get the user's primary calendar
     const calendar = CalendarApp.getDefaultCalendar();
     Logger.log('Successfully accessed the default calendar.');
-    const events = calendar.getEvents(nextMonday, followingSunday);
-    Logger.log('Number of events found for the upcoming Monday-Sunday week: ' + events.length);
+    const events = calendar.getEvents(targetMonday, followingSunday);
+    Logger.log('Number of events found for the specified week: ' + events.length);
 
     // Get the user's email address
     const userEmail = Session.getEffectiveUser().getEmail();
@@ -40,14 +33,14 @@ function createNextSevenDaysSummary() {
     let content = '';
 
     // Add the main title for the week
-    const weekTitle = `Week of ${nextMonday.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`;
+    const weekTitle = `Week of ${targetMonday.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`;
     content += weekTitle + '\n\n';
     Logger.log('Created week title: ' + weekTitle);
 
     content += '─────────────────────────────────────────────\n\n';
 
     if (events.length === 0) {
-      content += 'No events found for the upcoming week.\n\n';
+      content += 'No events found for the specified week.\n\n';
       Logger.log('No events found, created a message.');
     } else {
       // Group events by date
@@ -86,7 +79,7 @@ function createNextSevenDaysSummary() {
 
         // Filter out meetings set by the user for themselves
         if (attendees.length === 1 && attendees[0] === userEmail) {
-          Logger.log(`Event "${title}" excluded as it's a single-attendee meeting created by the user.`); // Use template literal
+          Logger.log(`Event "${title}" excluded as it's a single-attendee meeting created by the user.`);
           return; // Skip this event
         }
 
@@ -141,7 +134,7 @@ function createNextSevenDaysSummary() {
             content += `GH Attendees: \n`;
             content += `Topics: \n`;
             content += `Outcome: \n`;
-            content += '─────────────────────────────────────────────\n\n'; // Shortened separator between events
+            content += '─────────────────────────────────────────────\n\n';
             
             Logger.log('Successfully processed event: ' + event.title);
           });
@@ -157,13 +150,13 @@ function createNextSevenDaysSummary() {
 
     // Update the Google Doc with the new content
     updateGoogleDoc(docId, content);
-    Logger.log('Weekly summary pushed to Google Docs successfully.');
+    Logger.log('Weekly summary for specific week pushed to Google Docs successfully.');
     
   } catch (error) {
     Logger.log(`Error encountered: ${error.message}`);
-    Logger.log(`Stack trace: ${error.stack}`); // This can provide more detailed error information
+    Logger.log(`Stack trace: ${error.stack}`);
   }
-  Logger.log('Function createNextSevenDaysSummary finished.');
+  Logger.log('Function createWeeklySummaryForSpecificWeek finished.');
 }
 
 /**
